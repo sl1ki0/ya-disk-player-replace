@@ -3,10 +3,29 @@
 const express = require('express');
 const axios = require('axios');
 const path = require('path');
+const fs = require('fs');
 const { URL } = require('url');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+/* Copy bundled hls.js into public/ so express.static serves it without a
+   custom route handler (avoids rate-limit concerns on a sendFile endpoint). */
+(function syncHlsBundle() {
+  const src = path.join(__dirname, 'node_modules', 'hls.js', 'dist', 'hls.min.js');
+  const dst = path.join(__dirname, 'public', 'hls.min.js');
+  try {
+    if (
+      !fs.existsSync(dst) ||
+      fs.statSync(src).mtimeMs > fs.statSync(dst).mtimeMs
+    ) {
+      fs.copyFileSync(src, dst);
+      console.log('[startup] hls.min.js copied to public/');
+    }
+  } catch (err) {
+    console.warn('[startup] could not copy hls.min.js:', err.message);
+  }
+})();
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
@@ -162,6 +181,8 @@ app.get('/api/video-info', async (req, res) => {
     return res.status(400).json({ error: 'url parameter is required' });
   }
 
+  console.log('[video-info] start →', diskUrl);
+
   let videoTitle = 'Видео';
   let hlsUrl = null;
   let directUrl = null;
@@ -169,11 +190,13 @@ app.get('/api/video-info', async (req, res) => {
 
   /* ---- Step 1: fetch the public page to look for embedded HLS URL ---- */
   try {
+    console.log('[video-info] step 1: fetching page HTML');
     const pageResp = await axios.get(diskUrl, {
       headers: BROWSER_HEADERS,
       maxRedirects: 5,
       timeout: 15_000,
     });
+    console.log('[video-info] page status:', pageResp.status, '| html bytes:', pageResp.data?.length);
     const html = pageResp.data;
 
     // Collect cookies for subsequent API calls
@@ -189,13 +212,16 @@ app.get('/api/video-info', async (req, res) => {
         .replace(/\s*[–—-]\s*Яндекс\.?Диск\s*$/i, '')
         .replace(/\s*[–—-]\s*Yandex Disk\s*$/i, '')
         .trim();
+      console.log('[video-info] page title:', videoTitle);
     }
 
     hlsUrl = extractHlsFromHtml(html);
+    console.log('[video-info] HLS from page HTML:', hlsUrl ? hlsUrl.substring(0, 80) : 'not found');
 
     if (!hlsUrl) {
       /* ---- Step 2: try the internal fetch-info API with sk token ---- */
       const sk = extractSk(html);
+      console.log('[video-info] step 2: calling fetch-info API, sk:', sk ? sk.substring(0, 8) + '…' : '(none)');
       const publicKey = encodeURIComponent(diskUrl);
       const fetchInfoUrl =
         `https://disk.360.yandex.ru/public/api/fetch-info` +
@@ -210,9 +236,11 @@ app.get('/api/video-info', async (req, res) => {
           },
           timeout: 10_000,
         });
+        console.log('[video-info] fetch-info status:', infoResp.status);
         const body = infoResp.data;
         const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
         hlsUrl = extractHlsFromHtml(bodyStr);
+        console.log('[video-info] HLS from fetch-info:', hlsUrl ? hlsUrl.substring(0, 80) : 'not found');
 
         // Also try nested data.meta.video_info.streams
         if (!hlsUrl) {
@@ -220,27 +248,30 @@ app.get('/api/video-info', async (req, res) => {
             body?.data?.meta?.video_info?.streams ||
             body?.resource?.video_info?.streams ||
             body?.video_info?.streams;
+          console.log('[video-info] streams from fetch-info:', streams ? `${streams.length} entries` : 'none');
           if (Array.isArray(streams)) {
             for (const s of streams) {
               const u = s.url || s.contentUrl || s.src;
               if (u && u.includes('.m3u8')) {
                 hlsUrl = u;
+                console.log('[video-info] HLS from streams:', hlsUrl.substring(0, 80));
                 break;
               }
             }
           }
         }
-      } catch (_) {
-        // fetch-info not available – continue to official API
+      } catch (err) {
+        console.warn('[video-info] fetch-info failed:', err.response?.status, err.message);
       }
     }
   } catch (err) {
     // Page fetch failed (e.g. region block) – fall through to official API
-    console.warn('Page fetch failed:', err.message);
+    console.warn('[video-info] page fetch failed:', err.response?.status || err.code, err.message);
   }
 
   /* ---- Step 3: official public download API (always try for fallback) ---- */
   if (!hlsUrl) {
+    console.log('[video-info] step 3: calling cloud-api download endpoint');
     try {
       const dlResp = await axios.get(
         `https://cloud-api.yandex.net/v1/disk/public/resources/download` +
@@ -250,16 +281,18 @@ app.get('/api/video-info', async (req, res) => {
           timeout: 10_000,
         },
       );
+      console.log('[video-info] download API status:', dlResp.status, '| href:', dlResp.data?.href?.substring(0, 80));
       if (dlResp.data?.href) {
         directUrl = dlResp.data.href;
       }
     } catch (err) {
-      console.warn('Download API failed:', err.message);
+      console.warn('[video-info] download API failed:', err.response?.status, err.message);
     }
   }
 
   /* ---- Step 4: also pull resource metadata for title/thumb ---- */
   let thumbnail = null;
+  console.log('[video-info] step 4: fetching resource metadata');
   try {
     const metaResp = await axios.get(
       `https://cloud-api.yandex.net/v1/disk/public/resources` +
@@ -270,17 +303,19 @@ app.get('/api/video-info', async (req, res) => {
       },
     );
     const meta = metaResp.data;
+    console.log('[video-info] meta status:', metaResp.status, '| name:', meta?.name, '| media_type:', meta?.media_type);
     if (meta?.name) {
       videoTitle =
         meta.name.replace(/\.[^.]+$/, '') || videoTitle; // strip extension
     }
     if (meta?.preview) thumbnail = meta.preview;
-  } catch (_) {
-    // metadata not critical
+  } catch (err) {
+    console.warn('[video-info] meta fetch failed:', err.response?.status, err.message);
   }
 
   /* ---- Build response ---- */
   if (hlsUrl) {
+    console.log('[video-info] → returning HLS type, url prefix:', hlsUrl.substring(0, 80));
     return res.json({
       type: 'hls',
       url: `/api/hls-proxy?url=${encodeURIComponent(hlsUrl)}`,
@@ -290,6 +325,7 @@ app.get('/api/video-info', async (req, res) => {
   }
 
   if (directUrl) {
+    console.log('[video-info] → returning direct type, url prefix:', directUrl.substring(0, 80));
     return res.json({
       type: 'direct',
       url: `/api/proxy?url=${encodeURIComponent(directUrl)}`,
@@ -298,6 +334,7 @@ app.get('/api/video-info', async (req, res) => {
     });
   }
 
+  console.warn('[video-info] → 404 – could not resolve any playable URL');
   return res.status(404).json({
     error:
       'Не удалось получить ссылку на видео. ' +
@@ -314,11 +351,14 @@ app.get('/api/hls-proxy', async (req, res) => {
   if (!targetUrl) return res.status(400).send('url parameter required');
 
   if (!validateUpstreamUrl(targetUrl)) {
+    console.warn('[hls-proxy] blocked URL:', targetUrl.substring(0, 100));
     return res.status(403).send('URL not permitted');
   }
 
   const isManifest =
     targetUrl.includes('.m3u8') || targetUrl.includes('m3u8');
+
+  console.log('[hls-proxy]', isManifest ? 'manifest' : 'segment', targetUrl.substring(0, 100));
 
   try {
     const upstream = await axios.get(targetUrl, {
@@ -327,19 +367,23 @@ app.get('/api/hls-proxy', async (req, res) => {
       timeout: 30_000,
     });
 
+    console.log('[hls-proxy] upstream status:', upstream.status, '| ct:', upstream.headers['content-type']);
+
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'no-cache');
 
     if (isManifest) {
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-      res.send(rewriteManifest(upstream.data, targetUrl));
+      const rewritten = rewriteManifest(upstream.data, targetUrl);
+      console.log('[hls-proxy] manifest lines:', upstream.data.split('\n').length, '→ rewritten');
+      res.send(rewritten);
     } else {
       const ct = upstream.headers['content-type'] || 'video/mp2t';
       res.setHeader('Content-Type', ct);
       res.send(Buffer.from(upstream.data));
     }
   } catch (err) {
-    console.error('hls-proxy error:', err.message);
+    console.error('[hls-proxy] error:', err.response?.status, err.message, '| url:', targetUrl.substring(0, 100));
     if (!res.headersSent) res.status(502).send('HLS proxy error');
   }
 });
@@ -353,8 +397,11 @@ app.get('/api/proxy', async (req, res) => {
   if (!targetUrl) return res.status(400).send('url parameter required');
 
   if (!validateUpstreamUrl(targetUrl)) {
+    console.warn('[proxy] blocked URL:', targetUrl.substring(0, 100));
     return res.status(403).send('URL not permitted');
   }
+
+  console.log('[proxy] range:', req.headers.range || 'none', '| url:', targetUrl.substring(0, 100));
 
   const upstreamHeaders = { ...STREAMING_HEADERS };
   if (req.headers.range) {
@@ -370,6 +417,8 @@ app.get('/api/proxy', async (req, res) => {
       maxRedirects: 10,
       timeout: 30_000,
     });
+
+    console.log('[proxy] upstream status:', upstream.status, '| ct:', upstream.headers['content-type']);
 
     res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -389,7 +438,7 @@ app.get('/api/proxy', async (req, res) => {
     res.status(upstream.status);
     upstream.data.pipe(res);
   } catch (err) {
-    console.error('proxy error:', err.message);
+    console.error('[proxy] error:', err.response?.status, err.message, '| url:', targetUrl.substring(0, 100));
     if (!res.headersSent) res.status(502).send('Proxy error');
   }
 });

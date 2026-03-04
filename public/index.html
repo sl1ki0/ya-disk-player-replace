@@ -62,6 +62,16 @@
         <div class="spinner-ring"></div>
       </div>
 
+      <!-- ---- player-page error overlay ---- -->
+      <div id="player-error" class="player-error hidden" aria-live="assertive">
+        <div class="player-error-inner">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="#ff6b6b" aria-hidden="true">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+          </svg>
+          <p id="player-error-msg"></p>
+        </div>
+      </div>
+
       <!-- ---- center play/pause flash ---- -->
       <div id="center-flash" class="center-flash hidden" aria-hidden="true">
         <svg id="center-flash-icon" viewBox="0 0 80 80" fill="none">
@@ -200,10 +210,8 @@
     </div><!-- player-wrap -->
   </div><!-- player-page -->
 
-  <!-- hls.js from CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.11/dist/hls.min.js"
-          integrity="sha256-4aK5DFvDJovTqKxr5xLPLNWqm0CIx17KRqF0o+6gRXU="
-          crossorigin="anonymous"></script>
+  <!-- hls.js served locally to avoid CDN ad-block issues -->
+  <script src="/hls.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -28,6 +28,8 @@ const videoTitleEl   = $('video-title');
 const playerWrap     = $('player-wrap');
 const videoEl        = $('video');
 const loadingOverlay = $('loading-overlay');
+const playerErrorEl  = $('player-error');
+const playerErrorMsg = $('player-error-msg');
 const centerFlash    = $('center-flash');
 const flashPlay      = $('flash-play');
 const flashPause     = $('flash-pause');
@@ -70,10 +72,13 @@ const iconExitFs     = btnFullscreen.querySelector('.icon-exit-fullscreen');
    State
 ---------------------------------------------------------------- */
 let hls = null;
+let hlsNetworkRetries = 0;
+const HLS_MAX_NETWORK_RETRIES = 3;
 let isSeeking = false;
 let hideControlsTimer = null;
 let toastTimer = null;
 let flashTimer = null;
+let loadingTimer = null;
 let previousVolume = 1;
 let currentLevelIndex = -1; // -1 = auto
 
@@ -97,6 +102,20 @@ function showError(msg) {
 
 function hideError() {
   urlErrorEl.classList.add('hidden');
+}
+
+/** Show an error overlay on the player page itself. */
+function showPlayerError(msg) {
+  console.error('[player] error:', msg);
+  clearTimeout(loadingTimer);
+  loadingOverlay.classList.add('hidden');
+  playerErrorMsg.textContent = msg;
+  playerErrorEl.classList.remove('hidden');
+}
+
+function hidePlayerError() {
+  playerErrorEl.classList.add('hidden');
+  playerErrorMsg.textContent = '';
 }
 
 function setLoading(on) {
@@ -469,6 +488,21 @@ document.addEventListener('keydown', (e) => {
 });
 
 /* ----------------------------------------------------------------
+   Loading timeout – surface silent failures after 30 s
+---------------------------------------------------------------- */
+function startLoadingTimeout() {
+  clearTimeout(loadingTimer);
+  loadingTimer = setTimeout(() => {
+    // If video hasn't reached HAVE_FUTURE_DATA yet, it's still stuck
+    if (videoEl.readyState < 3) {
+      showPlayerError(
+        'Видео не удаётся загрузить. Проверьте логи сервера или попробуйте снова.',
+      );
+    }
+  }, 30_000);
+}
+
+/* ----------------------------------------------------------------
    Video events
 ---------------------------------------------------------------- */
 videoEl.addEventListener('play',       updatePlayButton);
@@ -478,11 +512,32 @@ videoEl.addEventListener('timeupdate', updateProgress);
 videoEl.addEventListener('progress',   updateBuffer);
 videoEl.addEventListener('volumechange', updateVolumeUI);
 
-videoEl.addEventListener('waiting',  () => loadingOverlay.classList.remove('hidden'));
-videoEl.addEventListener('playing',  () => loadingOverlay.classList.add('hidden'));
-videoEl.addEventListener('canplay',  () => loadingOverlay.classList.add('hidden'));
+videoEl.addEventListener('waiting',  () => {
+  console.log('[video] waiting…');
+  loadingOverlay.classList.remove('hidden');
+});
+videoEl.addEventListener('playing',  () => {
+  console.log('[video] playing');
+  clearTimeout(loadingTimer);
+  loadingOverlay.classList.add('hidden');
+  hidePlayerError();
+});
+videoEl.addEventListener('canplay',  () => {
+  console.log('[video] canplay – readyState:', videoEl.readyState);
+  loadingOverlay.classList.add('hidden');
+});
+
+videoEl.addEventListener('error', () => {
+  const err = videoEl.error;
+  const msg = err
+    ? `Ошибка видео (код ${err.code}): ${err.message}`
+    : 'Неизвестная ошибка загрузки видео.';
+  console.error('[video] error event:', msg);
+  showPlayerError(msg);
+});
 
 videoEl.addEventListener('durationchange', () => {
+  console.log('[video] duration:', videoEl.duration);
   timeTotal.textContent = formatTime(videoEl.duration);
 });
 
@@ -530,6 +585,7 @@ function destroyPlayer() {
     hls.destroy();
     hls = null;
   }
+  hlsNetworkRetries = 0;
   videoEl.removeAttribute('src');
   videoEl.load();
   qualityWrap.classList.add('hidden');
@@ -540,8 +596,17 @@ function destroyPlayer() {
 
 function initHls(manifestUrl) {
   destroyPlayer();
+  hidePlayerError();
+
+  if (typeof Hls === 'undefined') {
+    showPlayerError(
+      'hls.js не загрузился. Обновите страницу или проверьте блокировщики контента.',
+    );
+    return;
+  }
 
   if (Hls.isSupported()) {
+    console.log('[hls] initialising, manifest:', manifestUrl);
     hls = new Hls({
       autoStartLoad: true,
       startLevel: -1, // auto quality
@@ -552,43 +617,73 @@ function initHls(manifestUrl) {
     hls.loadSource(manifestUrl);
     hls.attachMedia(videoEl);
 
+    hls.on(Hls.Events.MANIFEST_LOADING, () => {
+      console.log('[hls] MANIFEST_LOADING');
+    });
+
     hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
+      console.log('[hls] MANIFEST_PARSED, levels:', data.levels.length);
       buildQualityMenu(data.levels);
-      videoEl.play().catch(() => {});
+      videoEl.play().catch((e) => console.warn('[hls] autoplay rejected:', e.message));
     });
 
     hls.on(Hls.Events.LEVEL_SWITCHED, (_evt, data) => {
+      console.log('[hls] LEVEL_SWITCHED ->', data.level);
       if (currentLevelIndex === -1) {
         const lvl = hls.levels[data.level];
         qualityLabel.textContent = lvl?.height ? `${lvl.height}p` : 'Auto';
       }
     });
 
+    hls.on(Hls.Events.FRAG_LOADING, (_evt, data) => {
+      console.log('[hls] FRAG_LOADING sn:', data.frag?.sn, 'url:', data.frag?.url?.substring(0, 80));
+    });
+
+    hls.on(Hls.Events.FRAG_LOADED, (_evt, data) => {
+      console.log('[hls] FRAG_LOADED sn:', data.frag?.sn);
+    });
+
     hls.on(Hls.Events.ERROR, (_evt, data) => {
+      console.error('[hls] ERROR type:', data.type, '| details:', data.details, '| fatal:', data.fatal, '| url:', data.url?.substring(0, 80));
       if (data.fatal) {
-        console.error('HLS fatal error:', data.type, data.details);
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          hls.startLoad();
+          if (hlsNetworkRetries < HLS_MAX_NETWORK_RETRIES) {
+            hlsNetworkRetries++;
+            console.warn(`[hls] fatal network error – retry ${hlsNetworkRetries}/${HLS_MAX_NETWORK_RETRIES}`);
+            hls.startLoad();
+          } else {
+            showPlayerError(
+              `Ошибка сети при загрузке потока (${data.details}). ` +
+              'Возможно, ссылка устарела — вернитесь и попробуйте снова.',
+            );
+          }
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          console.warn('[hls] fatal media error – trying to recover');
           hls.recoverMediaError();
         } else {
-          showError('Ошибка воспроизведения HLS потока.');
+          showPlayerError(
+            `Критическая ошибка HLS (${data.details}). ` +
+            'Возможно, ссылка устарела — попробуйте ещё раз.',
+          );
         }
       }
     });
   } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
     // Safari native HLS
+    console.log('[hls] using native HLS (Safari)');
     videoEl.src = manifestUrl;
-    videoEl.play().catch(() => {});
+    videoEl.play().catch((e) => console.warn('[hls] native autoplay rejected:', e.message));
   } else {
-    showError('Ваш браузер не поддерживает HLS воспроизведение.');
+    showPlayerError('Ваш браузер не поддерживает HLS воспроизведение.');
   }
 }
 
 function initDirect(videoUrl) {
   destroyPlayer();
+  hidePlayerError();
+  console.log('[direct] setting src:', videoUrl.substring(0, 100));
   videoEl.src = videoUrl;
-  videoEl.play().catch(() => {});
+  videoEl.play().catch((e) => console.warn('[direct] autoplay rejected:', e.message));
 }
 
 /* ----------------------------------------------------------------
@@ -616,13 +711,20 @@ urlForm.addEventListener('submit', async (e) => {
     landingEl.classList.add('hidden');
     playerPage.classList.remove('hidden');
     videoTitleEl.textContent = data.title || 'Видео';
-
+    hidePlayerError();
     loadingOverlay.classList.remove('hidden');
+    startLoadingTimeout();
 
-    if (data.type === 'hls') {
-      initHls(data.url);
-    } else {
-      initDirect(data.url);
+    console.log('[app] video-info response:', data.type, data.url?.substring(0, 80));
+
+    try {
+      if (data.type === 'hls') {
+        initHls(data.url);
+      } else {
+        initDirect(data.url);
+      }
+    } catch (initErr) {
+      showPlayerError(`Ошибка инициализации плеера: ${initErr.message}`);
     }
   } catch (err) {
     showError(err.message || 'Неизвестная ошибка. Проверьте ссылку и попробуйте снова.');
@@ -635,9 +737,11 @@ urlForm.addEventListener('submit', async (e) => {
    Back button
 ---------------------------------------------------------------- */
 backBtn.addEventListener('click', () => {
+  clearTimeout(loadingTimer);
   destroyPlayer();
   videoEl.pause();
   loadingOverlay.classList.add('hidden');
+  hidePlayerError();
   playerPage.classList.add('hidden');
   landingEl.classList.remove('hidden');
   hideError();

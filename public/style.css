@@ -223,6 +223,35 @@ html, body {
   z-index: 10;
 }
 
+/* ---------------------------------------------------------------
+   Player-page error overlay
+--------------------------------------------------------------- */
+.player-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.75);
+  z-index: 25;
+  padding: 20px;
+}
+
+.player-error-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 380px;
+  text-align: center;
+}
+
+.player-error-inner p {
+  color: #f1f1f1;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
 .spinner-ring {
   width: 60px;
   height: 60px;
