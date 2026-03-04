@@ -172,6 +172,42 @@ function rewriteManifest(text, baseUrl) {
     .join('\n');
 }
 
+/**
+ * If `url` points to a quality-specific HLS media playlist
+ * (e.g. …/240p/playlist.m3u8 or …/480/playlist.m3u8), try to fetch the
+ * parent master playlist (e.g. …/playlist.m3u8) which lists all quality
+ * levels. Falls back to the original URL if the master cannot be fetched
+ * or does not contain #EXT-X-STREAM-INF.
+ */
+async function resolveMasterPlaylist(url) {
+  // Pattern: anything followed by /NNN[p]/playlist.m3u8 with optional query string
+  const qualityRe = /^(https?:\/\/.+\/)(\d+p?\/playlist\.m3u8)(\?[^\s"']*)?$/i;
+  const m = url.match(qualityRe);
+  if (!m) return url;
+
+  const queryPart = m[3] || ''; // preserve any query/auth parameters
+  const masterUrl = m[1] + 'playlist.m3u8' + queryPart;
+  console.log('[video-info] quality-specific URL detected, trying master:', masterUrl.substring(0, 120));
+
+  try {
+    const masterResp = await axios.get(masterUrl, {
+      headers: STREAMING_HEADERS,
+      responseType: 'text',
+      timeout: 10_000,
+    });
+    if (typeof masterResp.data === 'string' && masterResp.data.includes('#EXT-X-STREAM-INF')) {
+      const levelCount = (masterResp.data.match(/#EXT-X-STREAM-INF/g) || []).length;
+      console.log(`[video-info] master playlist confirmed (${levelCount} levels), switching to master`);
+      return masterUrl;
+    }
+    console.log('[video-info] parent URL is not a master playlist, keeping original quality URL');
+  } catch (err) {
+    console.warn('[video-info] master playlist probe failed:', err.response?.status, err.message, '– keeping original');
+  }
+
+  return url;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Route: GET /api/video-info?url=<yandex_disk_public_url>           */
 /* ------------------------------------------------------------------ */
@@ -315,6 +351,7 @@ app.get('/api/video-info', async (req, res) => {
 
   /* ---- Build response ---- */
   if (hlsUrl) {
+    hlsUrl = await resolveMasterPlaylist(hlsUrl);
     console.log('[video-info] → returning HLS type, url prefix:', hlsUrl.substring(0, 80));
     return res.json({
       type: 'hls',
