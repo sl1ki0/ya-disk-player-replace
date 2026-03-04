@@ -147,26 +147,89 @@ function extractSk(html) {
 }
 
 /**
+ * Try to extract an internal resource hash (base64) from Yandex Disk HTML.
+ * The hash is used by the get-video-streams API and looks like a base64 string
+ * (e.g. "j2/8t9XZVJrl6a...Dag==").  In JSON it may have escaped slashes (\/).
+ */
+function extractResourceHash(html) {
+  const re = /"hash"\s*:\s*"([^"]{20,})"/g;
+  let match;
+  while ((match = re.exec(html)) !== null) {
+    let hash = match[1]
+      .replace(/\\\//g, '/')
+      .replace(/\\u002F/gi, '/');
+    // Must be valid base64 AND contain at least one of +, / or =
+    // (to distinguish from hex-like tokens such as sk)
+    if (/^[A-Za-z0-9+/]+=*$/.test(hash) && /[+/=]/.test(hash)) {
+      return hash;
+    }
+  }
+  return null;
+}
+
+/**
+ * Decode HTML-encoded ampersands that may appear inside URLs embedded in HTML.
+ * Yandex pages sometimes embed streaming URLs with `&amp;` instead of `&`.
+ */
+function decodeHtmlEntities(url) {
+  return url.replace(/&amp;/gi, '&');
+}
+
+/**
+ * Given a streaming.disk.yandex.net URL that points to a .ts segment or other
+ * non-manifest resource, try to derive the master-playlist.m3u8 URL by
+ * stripping the quality-specific path components and preserving query params.
+ * Returns null when derivation is not possible.
+ */
+function deriveManifestUrl(streamingUrl) {
+  try {
+    const parsed = new URL(streamingUrl);
+    if (parsed.pathname.includes('.m3u8')) return streamingUrl;
+
+    // .ts / .m4s segment: .../720p/3.ts → .../master-playlist.m3u8
+    const segMatch = parsed.pathname.match(
+      /^(.+)\/\d{2,4}p\/[^/]+\.(?:ts|m4s)$/i,
+    );
+    if (segMatch) {
+      parsed.pathname = segMatch[1] + '/master-playlist.m3u8';
+      return parsed.toString();
+    }
+
+    // Quality-specific directory without segment: .../720p/ → .../master-playlist.m3u8
+    const dirMatch = parsed.pathname.match(/^(.+)\/\d{2,4}p\/?$/i);
+    if (dirMatch) {
+      parsed.pathname = dirMatch[1] + '/master-playlist.m3u8';
+      return parsed.toString();
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Try to find an HLS master manifest URL (.m3u8) inside raw HTML.
  * Yandex embeds streaming URLs in the serialised page state.
  * Prefers adaptive/master playlist URLs over quality-specific ones.
  */
 function extractHlsFromHtml(html) {
+  // Normalise common JSON escape sequences for '/' so that all URL patterns
+  // work regardless of how Yandex serialised the URLs into the page.
+  const normalised = html.replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
+
   // First pass: look specifically for the adaptive master playlist
   const masterPatterns = [
     /(https?:\/\/streaming\.disk\.yandex\.net\/[^"'\s]*master-playlist\.m3u8[^"'\s]*)/,
     /"(https?:\/\/strm\.yandex\.ru\/[^"]*master-playlist\.m3u8[^"]*)"/,
   ];
   for (const re of masterPatterns) {
-    const m = html.match(re);
-    if (m) return m[1] || m[0];
+    const m = normalised.match(re);
+    if (m) return decodeHtmlEntities(m[1] || m[0]);
   }
 
   // Second pass: any .m3u8 URL (quality-specific fallback)
   const patterns = [
-    // escaped JSON in Next.js __NEXT_DATA__
-    /https?:\\u002F\\u002Fstreaming\.disk\.yandex\.net\\u002F[^"'\s\\]+\.m3u8[^"'\s]*/,
-    // plain streaming URL
     /(https?:\/\/streaming\.disk\.yandex\.net\/[^"'\s]+\.m3u8[^"'\s]*)/,
     /"(https?:\/\/strm\.yandex\.ru\/[^"]+\.m3u8[^"]*)"/,
     /"contentUrl"\s*:\s*"([^"]+\.m3u8[^"]*)"/,
@@ -174,14 +237,22 @@ function extractHlsFromHtml(html) {
     /"stream_url"\s*:\s*"([^"]+\.m3u8[^"]*)"/,
   ];
   for (const re of patterns) {
-    const m = html.match(re);
-    if (m) {
-      return m[0].startsWith('https')
-        ? m[0]
-        : // un-escape \\u002F → /
-          m[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/');
-    }
+    const m = normalised.match(re);
+    if (m) return decodeHtmlEntities(m[1] || m[0]);
   }
+
+  // Third pass: any streaming.disk.yandex.net/hls/ URL, including .ts segments
+  // or <video>/<source> src attributes.  Derive master playlist from the path.
+  const anyStreamRe =
+    /(https?:\/\/streaming\.disk\.yandex\.net\/hls\/[^"'\s<>]+)/;
+  const sm = normalised.match(anyStreamRe);
+  if (sm) {
+    const url = decodeHtmlEntities(sm[1]);
+    if (url.includes('.m3u8')) return url;
+    const derived = deriveManifestUrl(url);
+    if (derived) return derived;
+  }
+
   return null;
 }
 
@@ -232,8 +303,8 @@ function rewriteManifest(text, baseUrl) {
  * or does not contain #EXT-X-STREAM-INF.
  */
 async function resolveMasterPlaylist(url) {
-  // Pattern: anything followed by /NNN[p]/playlist.m3u8 with optional query string
-  const qualityRe = /^(https?:\/\/.+\/)(\d+p?\/playlist\.m3u8)(\?[^\s"']*)?$/i;
+  // Pattern: anything followed by /NNN[p]/<name>.m3u8 with optional query string
+  const qualityRe = /^(https?:\/\/.+\/)(\d+p?\/[^/?]+\.m3u8)(\?[^\s"']*)?$/i;
   const m = url.match(qualityRe);
   if (!m) return url;
 
@@ -258,6 +329,54 @@ async function resolveMasterPlaylist(url) {
   }
 
   return url;
+}
+
+/**
+ * Call the Yandex get-video-streams API and return the adaptive master
+ * playlist URL (or null).  `currentHlsUrl` is the URL we already have
+ * (if any) and is kept if get-video-streams fails.
+ */
+async function tryGetVideoStreams(sk, currentHlsUrl, fileHash, htmlResourceHash, folderFile, diskUrl, htmlCookies) {
+  // Construct the hash expected by get-video-streams:
+  // - If we got an internal hash from fetch-info, use it (+ file path for folder links)
+  // - Fall back to the hash extracted from the HTML page
+  // - Last resort: use the raw disk URL as the hash
+  const resolvedHash = fileHash || htmlResourceHash || null;
+  let gvsHash = null;
+  if (resolvedHash) {
+    gvsHash = folderFile ? `${resolvedHash}:${folderFile.filePath}` : resolvedHash;
+  } else {
+    // Some Yandex endpoints accept the full URL as the hash parameter
+    gvsHash = diskUrl;
+  }
+  console.log('[video-info] calling get-video-streams, hash:', gvsHash.length > 60 ? gvsHash.substring(0, 60) + '…' : gvsHash);
+  try {
+    const gvsResp = await axios.post(
+      'https://disk.yandex.ru/public/api/get-video-streams',
+      { hash: gvsHash, sk },
+      {
+        headers: {
+          ...BROWSER_HEADERS,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          Origin: 'https://disk.yandex.ru',
+          Referer: 'https://disk.yandex.ru/',
+          ...(htmlCookies ? { Cookie: htmlCookies } : {}),
+        },
+        timeout: 10_000,
+      },
+    );
+    console.log('[video-info] get-video-streams status:', gvsResp.status);
+    const videos = gvsResp.data?.data?.videos;
+    const adaptiveUrl = findAdaptiveStream(videos);
+    if (adaptiveUrl) {
+      console.log('[video-info] HLS from get-video-streams:', adaptiveUrl.substring(0, 80));
+      return adaptiveUrl;
+    }
+  } catch (err) {
+    console.warn('[video-info] get-video-streams failed:', err.response?.status, err.message);
+  }
+  return currentHlsUrl || null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -316,14 +435,31 @@ app.get('/api/video-info', async (req, res) => {
     hlsUrl = extractHlsFromHtml(html);
     console.log('[video-info] HLS from page HTML:', hlsUrl ? hlsUrl.substring(0, 80) : 'not found');
 
+    // Try to extract the internal resource hash from the page HTML
+    // (used as a fallback for get-video-streams when fetch-info does not return it)
+    const htmlResourceHash = extractResourceHash(html);
+    if (htmlResourceHash) console.log('[video-info] resource hash from HTML:', htmlResourceHash.length > 40 ? htmlResourceHash.substring(0, 40) + '…' : htmlResourceHash);
+
+    // Always extract sk – it is needed for get-video-streams even when
+    // a quality-specific HLS URL was already found in the HTML.
+    const sk = extractSk(html);
+
     if (!hlsUrl) {
       /* ---- Step 2: try the internal fetch-info API with sk token ---- */
-      const sk = extractSk(html);
       console.log('[video-info] step 2: calling fetch-info API, sk:', sk ? sk.substring(0, 8) + '…' : '(none)');
-      const publicKey = encodeURIComponent(diskUrl);
+      // For folder-file URLs use just the folder URL as hash + a path parameter;
+      // also call the API on the same domain as the original URL.
+      const fetchInfoHash = folderFile ? folderFile.folderUrl : diskUrl;
+      const fetchInfoPath = folderFile ? `&path=${encodeURIComponent(folderFile.filePath)}` : '';
+      let fetchInfoDomain = 'disk.360.yandex.ru';
+      try {
+        const h = new URL(diskUrl).hostname.toLowerCase();
+        if (h === 'disk.yandex.ru' || h === 'disk.360.yandex.ru') fetchInfoDomain = h;
+      } catch { /* keep default */ }
+      const publicKey = encodeURIComponent(fetchInfoHash);
       const fetchInfoUrl =
-        `https://disk.360.yandex.ru/public/api/fetch-info` +
-        `?hash=${publicKey}&sk=${sk}`;
+        `https://${fetchInfoDomain}/public/api/fetch-info` +
+        `?hash=${publicKey}${fetchInfoPath}&sk=${sk}`;
 
       let fileHash = null; // internal Yandex hash, used for get-video-streams
 
@@ -391,40 +527,18 @@ app.get('/api/video-info', async (req, res) => {
 
       /* ---- Step 2b: call get-video-streams for adaptive HLS ---- */
       if (!hlsUrl && sk) {
-        // Construct the hash expected by get-video-streams:
-        // - If we got an internal hash from fetch-info, use it (+ file path for folder links)
-        // - Otherwise fall back to using the raw disk URL as the hash
-        let gvsHash = null;
-        if (fileHash) {
-          gvsHash = folderFile ? `${fileHash}:${folderFile.filePath}` : fileHash;
-        } else {
-          // Some Yandex endpoints accept the full URL as the hash parameter
-          gvsHash = diskUrl;
-        }
-        console.log('[video-info] step 2b: calling get-video-streams, hash:', gvsHash.length > 60 ? gvsHash.substring(0, 60) + '…' : gvsHash);
-        try {
-          const gvsResp = await axios.post(
-            'https://disk.yandex.ru/public/api/get-video-streams',
-            { hash: gvsHash, sk },
-            {
-              headers: {
-                ...BROWSER_HEADERS,
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                Origin: 'https://disk.yandex.ru',
-                Referer: 'https://disk.yandex.ru/',
-                ...(htmlCookies ? { Cookie: htmlCookies } : {}),
-              },
-              timeout: 10_000,
-            },
-          );
-          console.log('[video-info] get-video-streams status:', gvsResp.status);
-          const videos = gvsResp.data?.data?.videos;
-          hlsUrl = findAdaptiveStream(videos);
-          if (hlsUrl) console.log('[video-info] HLS from get-video-streams:', hlsUrl.substring(0, 80));
-        } catch (err) {
-          console.warn('[video-info] get-video-streams failed:', err.response?.status, err.message);
-        }
+        hlsUrl = await tryGetVideoStreams(sk, null, fileHash, htmlResourceHash, folderFile, diskUrl, htmlCookies);
+      }
+    }
+
+    /* ---- Step 2c: if we only got a quality-specific URL (not master),
+       still try get-video-streams to obtain the adaptive master playlist ---- */
+    if (hlsUrl && !(hlsUrl.includes('master-playlist')) && sk) {
+      console.log('[video-info] step 2c: have quality-specific URL, trying get-video-streams for adaptive master');
+      // fileHash is null here because step 2 (fetch-info) was skipped when the HTML already contained an HLS URL
+      const adaptiveUrl = await tryGetVideoStreams(sk, hlsUrl, null, htmlResourceHash, folderFile, diskUrl, htmlCookies);
+      if (adaptiveUrl) {
+        hlsUrl = adaptiveUrl;
       }
     }
   } catch (err) {
