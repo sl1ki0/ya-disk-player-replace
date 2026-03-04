@@ -176,6 +176,39 @@ function decodeHtmlEntities(url) {
 }
 
 /**
+ * Given a streaming.disk.yandex.net URL that points to a .ts segment or other
+ * non-manifest resource, try to derive the master-playlist.m3u8 URL by
+ * stripping the quality-specific path components and preserving query params.
+ * Returns null when derivation is not possible.
+ */
+function deriveManifestUrl(streamingUrl) {
+  try {
+    const parsed = new URL(streamingUrl);
+    if (parsed.pathname.includes('.m3u8')) return streamingUrl;
+
+    // .ts / .m4s segment: .../720p/3.ts → .../master-playlist.m3u8
+    const segMatch = parsed.pathname.match(
+      /^(.+)\/\d{2,4}p\/[^/]+\.(?:ts|m4s)$/i,
+    );
+    if (segMatch) {
+      parsed.pathname = segMatch[1] + '/master-playlist.m3u8';
+      return parsed.toString();
+    }
+
+    // Quality-specific directory without segment: .../720p/ → .../master-playlist.m3u8
+    const dirMatch = parsed.pathname.match(/^(.+)\/\d{2,4}p\/?$/i);
+    if (dirMatch) {
+      parsed.pathname = dirMatch[1] + '/master-playlist.m3u8';
+      return parsed.toString();
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Try to find an HLS master manifest URL (.m3u8) inside raw HTML.
  * Yandex embeds streaming URLs in the serialised page state.
  * Prefers adaptive/master playlist URLs over quality-specific ones.
@@ -207,6 +240,19 @@ function extractHlsFromHtml(html) {
     const m = normalised.match(re);
     if (m) return decodeHtmlEntities(m[1] || m[0]);
   }
+
+  // Third pass: any streaming.disk.yandex.net/hls/ URL, including .ts segments
+  // or <video>/<source> src attributes.  Derive master playlist from the path.
+  const anyStreamRe =
+    /(https?:\/\/streaming\.disk\.yandex\.net\/hls\/[^"'\s<>]+)/;
+  const sm = normalised.match(anyStreamRe);
+  if (sm) {
+    const url = decodeHtmlEntities(sm[1]);
+    if (url.includes('.m3u8')) return url;
+    const derived = deriveManifestUrl(url);
+    if (derived) return derived;
+  }
+
   return null;
 }
 
