@@ -149,20 +149,8 @@ function extractSk(html) {
 /**
  * Try to find an HLS master manifest URL (.m3u8) inside raw HTML.
  * Yandex embeds streaming URLs in the serialised page state.
- * Prefers adaptive/master playlist URLs over quality-specific ones.
  */
 function extractHlsFromHtml(html) {
-  // First pass: look specifically for the adaptive master playlist
-  const masterPatterns = [
-    /(https?:\/\/streaming\.disk\.yandex\.net\/[^"'\s]*master-playlist\.m3u8[^"'\s]*)/,
-    /"(https?:\/\/strm\.yandex\.ru\/[^"]*master-playlist\.m3u8[^"]*)"/,
-  ];
-  for (const re of masterPatterns) {
-    const m = html.match(re);
-    if (m) return m[1] || m[0];
-  }
-
-  // Second pass: any .m3u8 URL (quality-specific fallback)
   const patterns = [
     // escaped JSON in Next.js __NEXT_DATA__
     /https?:\\u002F\\u002Fstreaming\.disk\.yandex\.net\\u002F[^"'\s\\]+\.m3u8[^"'\s]*/,
@@ -183,20 +171,6 @@ function extractHlsFromHtml(html) {
     }
   }
   return null;
-}
-
-/**
- * From an array of video stream objects (as returned by get-video-streams),
- * return the best HLS URL: the adaptive/master-playlist entry first, falling
- * back to the first entry that has an .m3u8 URL.
- */
-function findAdaptiveStream(videos) {
-  if (!Array.isArray(videos)) return null;
-  const adaptive = videos.find(
-    (v) => v.dimension === 'adaptive' || (v.url || '').includes('master-playlist'),
-  );
-  const firstM3u8 = videos.find((v) => (v.url || '').includes('.m3u8'));
-  return adaptive?.url || firstM3u8?.url || null;
 }
 
 /** Resolve a possibly-relative HLS line to an absolute URL */
@@ -325,8 +299,6 @@ app.get('/api/video-info', async (req, res) => {
         `https://disk.360.yandex.ru/public/api/fetch-info` +
         `?hash=${publicKey}&sk=${sk}`;
 
-      let fileHash = null; // internal Yandex hash, used for get-video-streams
-
       try {
         const infoResp = await axios.get(fetchInfoUrl, {
           headers: {
@@ -342,26 +314,7 @@ app.get('/api/video-info', async (req, res) => {
         hlsUrl = extractHlsFromHtml(bodyStr);
         console.log('[video-info] HLS from fetch-info:', hlsUrl ? hlsUrl.substring(0, 80) : 'not found');
 
-        // Extract the internal file hash for use with get-video-streams
-        fileHash =
-          body?.data?.hash ||
-          body?.data?.meta?.hash ||
-          body?.resource?.hash ||
-          body?.hash ||
-          null;
-        if (fileHash) console.log('[video-info] file hash from fetch-info:', fileHash.length > 40 ? fileHash.substring(0, 40) + '…' : fileHash);
-
-        // Check for videos array (same format as get-video-streams response)
-        if (!hlsUrl) {
-          const videos =
-            body?.data?.videos ||
-            body?.resource?.videos ||
-            body?.videos;
-          hlsUrl = findAdaptiveStream(videos);
-          if (hlsUrl) console.log('[video-info] HLS from fetch-info videos:', hlsUrl.substring(0, 80));
-        }
-
-        // Also try nested data.meta.video_info.streams — prefer adaptive stream
+        // Also try nested data.meta.video_info.streams
         if (!hlsUrl) {
           const streams =
             body?.data?.meta?.video_info?.streams ||
@@ -369,62 +322,18 @@ app.get('/api/video-info', async (req, res) => {
             body?.video_info?.streams;
           console.log('[video-info] streams from fetch-info:', streams ? `${streams.length} entries` : 'none');
           if (Array.isArray(streams)) {
-            let adaptiveUrl = null;
-            let firstUrl = null;
             for (const s of streams) {
               const u = s.url || s.contentUrl || s.src;
-              if (!u || !u.includes('.m3u8')) continue;
-              if (!firstUrl) firstUrl = u;
-              const dim = (s.dimension || s.format || '').toLowerCase();
-              if (dim === 'adaptive' || u.includes('master-playlist')) {
-                adaptiveUrl = u;
+              if (u && u.includes('.m3u8')) {
+                hlsUrl = u;
+                console.log('[video-info] HLS from streams:', hlsUrl.substring(0, 80));
                 break;
               }
             }
-            hlsUrl = adaptiveUrl || firstUrl || null;
-            if (hlsUrl) console.log('[video-info] HLS from streams:', hlsUrl.substring(0, 80));
           }
         }
       } catch (err) {
         console.warn('[video-info] fetch-info failed:', err.response?.status, err.message);
-      }
-
-      /* ---- Step 2b: call get-video-streams for adaptive HLS ---- */
-      if (!hlsUrl && sk) {
-        // Construct the hash expected by get-video-streams:
-        // - If we got an internal hash from fetch-info, use it (+ file path for folder links)
-        // - Otherwise fall back to using the raw disk URL as the hash
-        let gvsHash = null;
-        if (fileHash) {
-          gvsHash = folderFile ? `${fileHash}:${folderFile.filePath}` : fileHash;
-        } else {
-          // Some Yandex endpoints accept the full URL as the hash parameter
-          gvsHash = diskUrl;
-        }
-        console.log('[video-info] step 2b: calling get-video-streams, hash:', gvsHash.length > 60 ? gvsHash.substring(0, 60) + '…' : gvsHash);
-        try {
-          const gvsResp = await axios.post(
-            'https://disk.yandex.ru/public/api/get-video-streams',
-            { hash: gvsHash, sk },
-            {
-              headers: {
-                ...BROWSER_HEADERS,
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                Origin: 'https://disk.yandex.ru',
-                Referer: 'https://disk.yandex.ru/',
-                ...(htmlCookies ? { Cookie: htmlCookies } : {}),
-              },
-              timeout: 10_000,
-            },
-          );
-          console.log('[video-info] get-video-streams status:', gvsResp.status);
-          const videos = gvsResp.data?.data?.videos;
-          hlsUrl = findAdaptiveStream(videos);
-          if (hlsUrl) console.log('[video-info] HLS from get-video-streams:', hlsUrl.substring(0, 80));
-        } catch (err) {
-          console.warn('[video-info] get-video-streams failed:', err.response?.status, err.message);
-        }
       }
     }
   } catch (err) {
