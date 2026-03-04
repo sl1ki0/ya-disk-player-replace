@@ -147,6 +147,27 @@ function extractSk(html) {
 }
 
 /**
+ * Try to extract an internal resource hash (base64) from Yandex Disk HTML.
+ * The hash is used by the get-video-streams API and looks like a base64 string
+ * (e.g. "j2/8t9XZVJrl6a...Dag==").  In JSON it may have escaped slashes (\/).
+ */
+function extractResourceHash(html) {
+  const re = /"hash"\s*:\s*"([^"]{20,})"/g;
+  let match;
+  while ((match = re.exec(html)) !== null) {
+    let hash = match[1]
+      .replace(/\\\//g, '/')
+      .replace(/\\u002F/gi, '/');
+    // Must be valid base64 AND contain at least one of +, / or =
+    // (to distinguish from hex-like tokens such as sk)
+    if (/^[A-Za-z0-9+/]+=*$/.test(hash) && /[+/=]/.test(hash)) {
+      return hash;
+    }
+  }
+  return null;
+}
+
+/**
  * Try to find an HLS master manifest URL (.m3u8) inside raw HTML.
  * Yandex embeds streaming URLs in the serialised page state.
  * Prefers adaptive/master playlist URLs over quality-specific ones.
@@ -316,14 +337,28 @@ app.get('/api/video-info', async (req, res) => {
     hlsUrl = extractHlsFromHtml(html);
     console.log('[video-info] HLS from page HTML:', hlsUrl ? hlsUrl.substring(0, 80) : 'not found');
 
+    // Try to extract the internal resource hash from the page HTML
+    // (used as a fallback for get-video-streams when fetch-info does not return it)
+    const htmlResourceHash = extractResourceHash(html);
+    if (htmlResourceHash) console.log('[video-info] resource hash from HTML:', htmlResourceHash.length > 40 ? htmlResourceHash.substring(0, 40) + '…' : htmlResourceHash);
+
     if (!hlsUrl) {
       /* ---- Step 2: try the internal fetch-info API with sk token ---- */
       const sk = extractSk(html);
       console.log('[video-info] step 2: calling fetch-info API, sk:', sk ? sk.substring(0, 8) + '…' : '(none)');
-      const publicKey = encodeURIComponent(diskUrl);
+      // For folder-file URLs use just the folder URL as hash + a path parameter;
+      // also call the API on the same domain as the original URL.
+      const fetchInfoHash = folderFile ? folderFile.folderUrl : diskUrl;
+      const fetchInfoPath = folderFile ? `&path=${encodeURIComponent(folderFile.filePath)}` : '';
+      let fetchInfoDomain = 'disk.360.yandex.ru';
+      try {
+        const h = new URL(diskUrl).hostname.toLowerCase();
+        if (h === 'disk.yandex.ru' || h === 'disk.360.yandex.ru') fetchInfoDomain = h;
+      } catch { /* keep default */ }
+      const publicKey = encodeURIComponent(fetchInfoHash);
       const fetchInfoUrl =
-        `https://disk.360.yandex.ru/public/api/fetch-info` +
-        `?hash=${publicKey}&sk=${sk}`;
+        `https://${fetchInfoDomain}/public/api/fetch-info` +
+        `?hash=${publicKey}${fetchInfoPath}&sk=${sk}`;
 
       let fileHash = null; // internal Yandex hash, used for get-video-streams
 
@@ -393,10 +428,12 @@ app.get('/api/video-info', async (req, res) => {
       if (!hlsUrl && sk) {
         // Construct the hash expected by get-video-streams:
         // - If we got an internal hash from fetch-info, use it (+ file path for folder links)
-        // - Otherwise fall back to using the raw disk URL as the hash
+        // - Fall back to the hash extracted from the HTML page
+        // - Last resort: use the raw disk URL as the hash
+        const resolvedHash = fileHash || htmlResourceHash || null;
         let gvsHash = null;
-        if (fileHash) {
-          gvsHash = folderFile ? `${fileHash}:${folderFile.filePath}` : fileHash;
+        if (resolvedHash) {
+          gvsHash = folderFile ? `${resolvedHash}:${folderFile.filePath}` : resolvedHash;
         } else {
           // Some Yandex endpoints accept the full URL as the hash parameter
           gvsHash = diskUrl;
