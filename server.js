@@ -103,6 +103,32 @@ function extractPublicKey(diskUrl) {
 }
 
 /**
+ * Detect a Yandex Disk folder-with-file URL of the form:
+ *   https://disk.yandex.ru/d/<hash>/<filepath>
+ *   https://disk.360.yandex.ru/d/<hash>/<filepath>
+ *
+ * Returns { folderUrl, filePath } when detected, or null otherwise.
+ * `filePath` starts with '/' and is already decoded (human-readable).
+ */
+function parseFolderFileUrl(diskUrl) {
+  let parsed;
+  try {
+    parsed = new URL(diskUrl);
+  } catch {
+    return null;
+  }
+  // Match /d/<hash>/<rest> where <rest> is non-empty
+  const m = parsed.pathname.match(/^(\/d\/[^/]+)(\/.+)$/);
+  if (!m) return null;
+  const folderPath = m[1];
+  const filePath = decodeURIComponent(m[2]); // e.g. "/Лекция 21.mkv"
+  // Guard against directory traversal
+  if (filePath.includes('..')) return null;
+  const folderUrl = `${parsed.protocol}//${parsed.host}${folderPath}`;
+  return { folderUrl, filePath };
+}
+
+/**
  * Try to pull the `sk` CSRF token out of a Yandex Disk HTML page.
  * Yandex embeds it in several places depending on the page version.
  */
@@ -219,6 +245,16 @@ app.get('/api/video-info', async (req, res) => {
 
   console.log('[video-info] start →', diskUrl);
 
+  // Detect folder-with-file URLs: /d/<hash>/<filepath>
+  const folderFile = parseFolderFileUrl(diskUrl);
+  if (folderFile) {
+    console.log('[video-info] folder-file URL detected → folder:', folderFile.folderUrl, '| path:', folderFile.filePath);
+  }
+
+  // For API calls: use the folder URL as public_key + path parameter when applicable
+  const apiPublicKey = folderFile ? folderFile.folderUrl : diskUrl;
+  const apiPathParam = folderFile ? `&path=${encodeURIComponent(folderFile.filePath)}` : '';
+
   let videoTitle = 'Видео';
   let hlsUrl = null;
   let directUrl = null;
@@ -311,7 +347,7 @@ app.get('/api/video-info', async (req, res) => {
     try {
       const dlResp = await axios.get(
         `https://cloud-api.yandex.net/v1/disk/public/resources/download` +
-          `?public_key=${encodeURIComponent(diskUrl)}`,
+          `?public_key=${encodeURIComponent(apiPublicKey)}${apiPathParam}`,
         {
           headers: { ...BROWSER_HEADERS, Accept: 'application/json' },
           timeout: 10_000,
@@ -332,7 +368,7 @@ app.get('/api/video-info', async (req, res) => {
   try {
     const metaResp = await axios.get(
       `https://cloud-api.yandex.net/v1/disk/public/resources` +
-        `?public_key=${encodeURIComponent(diskUrl)}&preview_size=L`,
+        `?public_key=${encodeURIComponent(apiPublicKey)}${apiPathParam}&preview_size=L`,
       {
         headers: { ...BROWSER_HEADERS, Accept: 'application/json' },
         timeout: 8_000,
