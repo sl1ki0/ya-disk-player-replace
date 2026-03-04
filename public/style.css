@@ -1,0 +1,553 @@
+/* ================================================================
+   Ya-Disk-Player – global stylesheet
+   Dark YouTube-inspired theme with smooth controls
+   ================================================================ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #0f0f0f;
+  --surface:     #1a1a1a;
+  --surface2:    #272727;
+  --accent:      #ff0000;
+  --text:        #f1f1f1;
+  --text-dim:    #aaa;
+  --ctrl-h:      40px;
+  --progress-h:  4px;
+  --progress-h-hover: 6px;
+  --thumb-size:  13px;
+  --transition:  0.15s ease;
+  --radius:      8px;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-x: hidden;
+}
+
+/* ---------------------------------------------------------------
+   Utilities
+--------------------------------------------------------------- */
+.hidden { display: none !important; }
+
+/* ---------------------------------------------------------------
+   Landing page
+--------------------------------------------------------------- */
+.landing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.landing-card {
+  width: 100%;
+  max-width: 560px;
+  text-align: center;
+}
+
+.landing-logo {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.landing-title {
+  font-size: clamp(1.4rem, 4vw, 2rem);
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.landing-sub {
+  color: var(--text-dim);
+  margin-bottom: 28px;
+  font-size: 0.95rem;
+}
+
+.url-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.url-input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 2px solid var(--surface2);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color var(--transition);
+}
+.url-input:focus { border-color: var(--accent); }
+.url-input::placeholder { color: var(--text-dim); }
+
+.url-submit-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), opacity var(--transition);
+}
+.url-submit-btn:hover  { background: #cc0000; }
+.url-submit-btn:active { opacity: 0.85; }
+.url-submit-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.btn-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255,255,255,0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.url-error {
+  color: #ff6b6b;
+  font-size: 0.88rem;
+  margin-bottom: 12px;
+}
+
+.landing-hint {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+.landing-hint code {
+  background: var(--surface2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+/* ---------------------------------------------------------------
+   Player page
+--------------------------------------------------------------- */
+.player-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.player-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--surface2);
+  flex-shrink: 0;
+}
+
+.back-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  transition: background var(--transition);
+  white-space: nowrap;
+}
+.back-btn:hover { background: var(--surface2); }
+
+.video-title-text {
+  font-size: 1rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------
+   Player wrapper
+--------------------------------------------------------------- */
+.player-wrap {
+  position: relative;
+  flex: 1;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  /* Ensure controls always have room */
+  padding-bottom: 0;
+}
+
+/* In fullscreen the wrapper is the whole screen */
+.player-wrap:fullscreen,
+.player-wrap:-webkit-full-screen,
+.player-wrap:-moz-full-screen {
+  background: #000;
+}
+
+.video-el {
+  width: 100%;
+  height: 100%;
+  max-height: calc(100vh - 60px);
+  object-fit: contain;
+  display: block;
+}
+
+/* ---------------------------------------------------------------
+   Loading overlay
+--------------------------------------------------------------- */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.6);
+  z-index: 10;
+}
+
+/* ---------------------------------------------------------------
+   Player-page error overlay
+--------------------------------------------------------------- */
+.player-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.75);
+  z-index: 25;
+  padding: 20px;
+}
+
+.player-error-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 380px;
+  text-align: center;
+}
+
+.player-error-inner p {
+  color: #f1f1f1;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.spinner-ring {
+  width: 60px;
+  height: 60px;
+  border: 4px solid rgba(255,255,255,0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* ---------------------------------------------------------------
+   Center flash animation (play / pause tap)
+--------------------------------------------------------------- */
+.center-flash {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 80px;
+  height: 80px;
+  background: rgba(0,0,0,0.55);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 20;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.center-flash.visible {
+  opacity: 1;
+  animation: flash-fade 0.6s ease forwards;
+}
+@keyframes flash-fade {
+  0%   { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+  60%  { opacity: 0.9; transform: translate(-50%,-50%) scale(1.12); }
+  100% { opacity: 0; transform: translate(-50%,-50%) scale(1.15); }
+}
+.center-flash svg { width: 100%; height: 100%; padding: 20px; }
+
+/* ---------------------------------------------------------------
+   Keyboard-shortcut toast
+--------------------------------------------------------------- */
+.kbd-toast {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: rgba(0,0,0,0.72);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  pointer-events: none;
+  z-index: 30;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.kbd-toast.visible {
+  opacity: 1;
+  animation: toast-fade 1.8s ease forwards;
+}
+@keyframes toast-fade {
+  0%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ---------------------------------------------------------------
+   Controls bar
+--------------------------------------------------------------- */
+.controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.85) 80%);
+  padding: 40px 12px 8px;
+  opacity: 0;
+  transition: opacity 0.25s;
+  z-index: 15;
+}
+
+/* Show controls on hover / focus / paused */
+.player-wrap:hover .controls,
+.player-wrap.paused .controls,
+.player-wrap.controls-visible .controls {
+  opacity: 1;
+}
+
+/* -------  Progress / seek area  ------- */
+.progress-area {
+  position: relative;
+  padding: 10px 0;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+
+.progress-track {
+  position: relative;
+  height: var(--progress-h);
+  background: rgba(255,255,255,0.2);
+  border-radius: 3px;
+  transition: height 0.15s;
+  overflow: visible;
+}
+
+.progress-area:hover .progress-track,
+.progress-area:focus  .progress-track {
+  height: var(--progress-h-hover);
+}
+
+.progress-buffer {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: rgba(255,255,255,0.35);
+  border-radius: 3px;
+  width: 0;
+}
+
+.progress-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: var(--accent);
+  border-radius: 3px;
+  width: 0;
+  pointer-events: none;
+}
+
+.progress-thumb {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  width: var(--thumb-size);
+  height: var(--thumb-size);
+  background: var(--accent);
+  border-radius: 50%;
+  pointer-events: none;
+  transition: transform 0.1s;
+  left: 0;
+}
+
+.progress-area:hover .progress-thumb,
+.progress-area:focus  .progress-thumb {
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.seek-tooltip {
+  position: absolute;
+  bottom: 28px;
+  background: rgba(0,0,0,0.85);
+  color: #fff;
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+  opacity: 0;
+  left: 0;
+}
+.progress-area:hover .seek-tooltip { opacity: 1; }
+
+/* -------  Bottom control bar  ------- */
+.ctrl-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  height: var(--ctrl-h);
+}
+
+.ctrl-left, .ctrl-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ctrl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background var(--transition);
+  flex-shrink: 0;
+  padding: 0;
+}
+.ctrl-btn:hover { background: rgba(255,255,255,0.12); }
+.ctrl-btn:focus-visible { outline: 2px solid var(--accent); }
+
+.icon {
+  width: 20px;
+  height: 20px;
+  pointer-events: none;
+}
+
+/* Volume group */
+.volume-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.vol-slider {
+  -webkit-appearance: none;
+  width: 80px;
+  height: 4px;
+  background: rgba(255,255,255,0.3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  transition: width var(--transition);
+}
+.vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.vol-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+/* Time display */
+.time-display {
+  display: flex;
+  align-items: center;
+  font-size: 0.82rem;
+  color: var(--text);
+  white-space: nowrap;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.time-sep { color: var(--text-dim); }
+
+/* -------  Quality selector  ------- */
+.quality-wrap, .speed-wrap {
+  position: relative;
+}
+
+.quality-btn, .speed-btn {
+  width: auto;
+  border-radius: 4px;
+  padding: 0 8px;
+  gap: 4px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.quality-caret { width: 10px; height: 10px; }
+
+.quality-menu, .speed-menu {
+  position: absolute;
+  bottom: 44px;
+  right: 0;
+  background: rgba(28, 28, 28, 0.97);
+  border: 1px solid var(--surface2);
+  border-radius: var(--radius);
+  list-style: none;
+  min-width: 110px;
+  z-index: 50;
+  overflow: hidden;
+  padding: 4px 0;
+}
+
+.quality-menu li, .speed-menu li {
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 0.88rem;
+  transition: background var(--transition);
+}
+.quality-menu li:hover, .speed-menu li:hover { background: var(--surface2); }
+.quality-menu li.selected, .speed-menu li.selected {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------
+   Responsive
+--------------------------------------------------------------- */
+@media (max-width: 480px) {
+  .vol-slider { width: 52px; }
+  .time-display { font-size: 0.75rem; }
+  .ctrl-btn { width: 30px; height: 30px; }
+  .icon { width: 17px; height: 17px; }
+  .landing-title { font-size: 1.3rem; }
+  .url-form { flex-direction: column; }
+}
