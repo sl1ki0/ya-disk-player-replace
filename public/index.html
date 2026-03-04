@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Яндекс Диск Плеер</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ===================== LANDING / URL INPUT ===================== -->
+  <div id="landing" class="landing">
+    <div class="landing-card">
+      <div class="landing-logo">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <circle cx="24" cy="24" r="24" fill="#ff0000"/>
+          <polygon points="19,14 37,24 19,34" fill="#fff"/>
+        </svg>
+      </div>
+      <h1 class="landing-title">Яндекс Диск Плеер</h1>
+      <p class="landing-sub">Вставьте публичную ссылку на видео с Яндекс Диска</p>
+      <form id="url-form" class="url-form" autocomplete="off">
+        <input
+          id="url-input"
+          type="url"
+          class="url-input"
+          placeholder="https://disk.360.yandex.ru/i/…"
+          required
+        />
+        <button type="submit" class="url-submit-btn">
+          <span class="btn-label">Открыть</span>
+          <span class="btn-spinner hidden" aria-hidden="true"></span>
+        </button>
+      </form>
+      <p id="url-error" class="url-error hidden"></p>
+      <p class="landing-hint">
+        Пример: <code>https://disk.360.yandex.ru/i/phdnku2qD3p3vw</code>
+      </p>
+    </div>
+  </div>
+
+  <!-- ===================== PLAYER PAGE ===================== -->
+  <div id="player-page" class="player-page hidden">
+    <header class="player-header">
+      <button id="back-btn" class="back-btn" aria-label="Назад">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+          <path d="M13.5 3L7 10l6.5 7" stroke="currentColor" stroke-width="2"
+                fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Назад
+      </button>
+      <h2 id="video-title" class="video-title-text"></h2>
+    </header>
+
+    <!-- =================== PLAYER WRAPPER =================== -->
+    <div class="player-wrap" id="player-wrap">
+
+      <!-- video element -->
+      <video id="video" class="video-el" preload="metadata" playsinline></video>
+
+      <!-- ---- loading spinner ---- -->
+      <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="spinner-ring"></div>
+      </div>
+
+      <!-- ---- center play/pause flash ---- -->
+      <div id="center-flash" class="center-flash hidden" aria-hidden="true">
+        <svg id="center-flash-icon" viewBox="0 0 80 80" fill="none">
+          <!-- play icon -->
+          <polygon id="flash-play" points="25,15 65,40 25,65" fill="white"/>
+          <!-- pause icon -->
+          <g id="flash-pause">
+            <rect x="18" y="12" width="16" height="56" rx="3" fill="white"/>
+            <rect x="46" y="12" width="16" height="56" rx="3" fill="white"/>
+          </g>
+        </svg>
+      </div>
+
+      <!-- ---- keyboard shortcut toast ---- -->
+      <div id="kbd-toast" class="kbd-toast hidden" aria-live="polite"></div>
+
+      <!-- ---- custom controls ---- -->
+      <div id="controls" class="controls">
+
+        <!-- progress / seek bar -->
+        <div class="progress-area" id="progress-area" role="slider"
+             aria-label="Прогресс воспроизведения" aria-valuemin="0"
+             aria-valuemax="100" aria-valuenow="0" tabindex="0">
+          <div class="progress-track" id="progress-track">
+            <div class="progress-buffer" id="progress-buffer"></div>
+            <div class="progress-fill"  id="progress-fill"></div>
+            <div class="progress-thumb" id="progress-thumb"></div>
+          </div>
+          <!-- time tooltip -->
+          <div class="seek-tooltip" id="seek-tooltip">0:00</div>
+        </div>
+
+        <!-- bottom row -->
+        <div class="ctrl-bar">
+          <div class="ctrl-left">
+            <!-- play/pause -->
+            <button id="btn-play" class="ctrl-btn" aria-label="Play">
+              <svg class="icon icon-play" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5,3 19,12 5,21"/>
+              </svg>
+              <svg class="icon icon-pause hidden" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="5"  y="3" width="4" height="18" rx="1"/>
+                <rect x="15" y="3" width="4" height="18" rx="1"/>
+              </svg>
+            </button>
+
+            <!-- rewind 10s -->
+            <button id="btn-rewind" class="ctrl-btn" aria-label="−10 сек">
+              <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M11.99 5V1l-5 5 5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6h-2c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
+                <text x="6" y="16" font-size="5.5" fill="currentColor">10</text>
+              </svg>
+            </button>
+
+            <!-- forward 10s -->
+            <button id="btn-forward" class="ctrl-btn" aria-label="+10 сек">
+              <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12.01 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/>
+                <text x="6" y="16" font-size="5.5" fill="currentColor">10</text>
+              </svg>
+            </button>
+
+            <!-- volume -->
+            <div class="volume-group">
+              <button id="btn-mute" class="ctrl-btn" aria-label="Звук">
+                <svg class="icon icon-vol-high" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="3,9 3,15 7,15 12,19 12,5 7,9"/>
+                  <path d="M16 12a4 4 0 0 0-2-3.46v6.92A4 4 0 0 0 16 12z"/>
+                  <path d="M14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/>
+                </svg>
+                <svg class="icon icon-vol-low hidden" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="3,9 3,15 7,15 12,19 12,5 7,9"/>
+                  <path d="M16 12a4 4 0 0 0-2-3.46v6.92A4 4 0 0 0 16 12z"/>
+                </svg>
+                <svg class="icon icon-vol-mute hidden" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="3,9 3,15 7,15 12,19 12,5 7,9"/>
+                  <line x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2"/>
+                  <line x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2"/>
+                </svg>
+              </button>
+              <input id="vol-slider" class="vol-slider" type="range"
+                     min="0" max="1" step="0.02" value="1"
+                     aria-label="Громкость"/>
+            </div>
+
+            <!-- time -->
+            <div class="time-display">
+              <span id="time-current">0:00</span>
+              <span class="time-sep">&nbsp;/&nbsp;</span>
+              <span id="time-total">0:00</span>
+            </div>
+          </div><!-- ctrl-left -->
+
+          <div class="ctrl-right">
+            <!-- quality selector (populated dynamically) -->
+            <div id="quality-wrap" class="quality-wrap hidden">
+              <button id="btn-quality" class="ctrl-btn quality-btn" aria-label="Качество">
+                <span id="quality-label">Auto</span>
+                <svg class="icon quality-caret" viewBox="0 0 10 6" fill="currentColor">
+                  <path d="M0 0l5 6 5-6z"/>
+                </svg>
+              </button>
+              <ul id="quality-menu" class="quality-menu hidden" role="listbox"
+                  aria-label="Выбор качества"></ul>
+            </div>
+
+            <!-- playback speed -->
+            <div class="speed-wrap">
+              <button id="btn-speed" class="ctrl-btn speed-btn" aria-label="Скорость">
+                <span id="speed-label">1×</span>
+              </button>
+              <ul id="speed-menu" class="speed-menu hidden" role="listbox"
+                  aria-label="Скорость воспроизведения">
+                <li data-speed="0.25" role="option">0.25×</li>
+                <li data-speed="0.5"  role="option">0.5×</li>
+                <li data-speed="0.75" role="option">0.75×</li>
+                <li data-speed="1"    role="option" class="selected">Обычная</li>
+                <li data-speed="1.25" role="option">1.25×</li>
+                <li data-speed="1.5"  role="option">1.5×</li>
+                <li data-speed="2"    role="option">2×</li>
+              </ul>
+            </div>
+
+            <!-- fullscreen -->
+            <button id="btn-fullscreen" class="ctrl-btn" aria-label="На весь экран">
+              <svg class="icon icon-fullscreen" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+              </svg>
+              <svg class="icon icon-exit-fullscreen hidden" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>
+              </svg>
+            </button>
+          </div><!-- ctrl-right -->
+        </div><!-- ctrl-bar -->
+      </div><!-- controls -->
+    </div><!-- player-wrap -->
+  </div><!-- player-page -->
+
+  <!-- hls.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.11/dist/hls.min.js"
+          integrity="sha256-4aK5DFvDJovTqKxr5xLPLNWqm0CIx17KRqF0o+6gRXU="
+          crossorigin="anonymous"></script>
+  <script src="app.js"></script>
+</body>
+</html>
