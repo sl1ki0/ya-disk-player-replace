@@ -173,21 +173,22 @@ function extractResourceHash(html) {
  * Prefers adaptive/master playlist URLs over quality-specific ones.
  */
 function extractHlsFromHtml(html) {
+  // Normalise common JSON escape sequences for '/' so that all URL patterns
+  // work regardless of how Yandex serialised the URLs into the page.
+  const normalised = html.replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
+
   // First pass: look specifically for the adaptive master playlist
   const masterPatterns = [
     /(https?:\/\/streaming\.disk\.yandex\.net\/[^"'\s]*master-playlist\.m3u8[^"'\s]*)/,
     /"(https?:\/\/strm\.yandex\.ru\/[^"]*master-playlist\.m3u8[^"]*)"/,
   ];
   for (const re of masterPatterns) {
-    const m = html.match(re);
+    const m = normalised.match(re);
     if (m) return m[1] || m[0];
   }
 
   // Second pass: any .m3u8 URL (quality-specific fallback)
   const patterns = [
-    // escaped JSON in Next.js __NEXT_DATA__
-    /https?:\\u002F\\u002Fstreaming\.disk\.yandex\.net\\u002F[^"'\s\\]+\.m3u8[^"'\s]*/,
-    // plain streaming URL
     /(https?:\/\/streaming\.disk\.yandex\.net\/[^"'\s]+\.m3u8[^"'\s]*)/,
     /"(https?:\/\/strm\.yandex\.ru\/[^"]+\.m3u8[^"]*)"/,
     /"contentUrl"\s*:\s*"([^"]+\.m3u8[^"]*)"/,
@@ -195,13 +196,8 @@ function extractHlsFromHtml(html) {
     /"stream_url"\s*:\s*"([^"]+\.m3u8[^"]*)"/,
   ];
   for (const re of patterns) {
-    const m = html.match(re);
-    if (m) {
-      return m[0].startsWith('https')
-        ? m[0]
-        : // un-escape \\u002F → /
-          m[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/');
-    }
+    const m = normalised.match(re);
+    if (m) return m[1] || m[0];
   }
   return null;
 }
@@ -253,8 +249,8 @@ function rewriteManifest(text, baseUrl) {
  * or does not contain #EXT-X-STREAM-INF.
  */
 async function resolveMasterPlaylist(url) {
-  // Pattern: anything followed by /NNN[p]/playlist.m3u8 with optional query string
-  const qualityRe = /^(https?:\/\/.+\/)(\d+p?\/playlist\.m3u8)(\?[^\s"']*)?$/i;
+  // Pattern: anything followed by /NNN[p]/<name>.m3u8 with optional query string
+  const qualityRe = /^(https?:\/\/.+\/)(\d+p?\/[^/?]+\.m3u8)(\?[^\s"']*)?$/i;
   const m = url.match(qualityRe);
   if (!m) return url;
 
