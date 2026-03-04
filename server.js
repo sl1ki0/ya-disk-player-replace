@@ -174,8 +174,8 @@ function rewriteManifest(text, baseUrl) {
 
 /**
  * If `url` points to a quality-specific HLS media playlist
- * (e.g. …/240p/playlist.m3u8 or …/480/playlist.m3u8), try to fetch the
- * parent master playlist (e.g. …/playlist.m3u8) which lists all quality
+ * (e.g. …/240p/playlist.m3u8 or …/480p/playlist.m3u8), try to fetch the
+ * Yandex master playlist (…/master-playlist.m3u8) which lists all quality
  * levels. Falls back to the original URL if the master cannot be fetched
  * or does not contain #EXT-X-STREAM-INF.
  */
@@ -186,7 +186,7 @@ async function resolveMasterPlaylist(url) {
   if (!m) return url;
 
   const queryPart = m[3] || ''; // preserve any query/auth parameters
-  const masterUrl = m[1] + 'playlist.m3u8' + queryPart;
+  const masterUrl = m[1] + 'master-playlist.m3u8' + queryPart;
   console.log('[video-info] quality-specific URL detected, trying master:', masterUrl.substring(0, 120));
 
   try {
