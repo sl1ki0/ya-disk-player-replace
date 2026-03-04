@@ -168,15 +168,11 @@ function extractResourceHash(html) {
 }
 
 /**
- * Decode common HTML entities that may appear inside URLs embedded in HTML.
+ * Decode HTML-encoded ampersands that may appear inside URLs embedded in HTML.
  * Yandex pages sometimes embed streaming URLs with `&amp;` instead of `&`.
  */
 function decodeHtmlEntities(url) {
-  return url
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"');
+  return url.replace(/&amp;/gi, '&');
 }
 
 /**
@@ -493,6 +489,7 @@ app.get('/api/video-info', async (req, res) => {
        still try get-video-streams to obtain the adaptive master playlist ---- */
     if (hlsUrl && !(hlsUrl.includes('master-playlist')) && sk) {
       console.log('[video-info] step 2c: have quality-specific URL, trying get-video-streams for adaptive master');
+      // fileHash is null here because step 2 (fetch-info) was skipped when the HTML already contained an HLS URL
       const adaptiveUrl = await tryGetVideoStreams(sk, hlsUrl, null, htmlResourceHash, folderFile, diskUrl, htmlCookies);
       if (adaptiveUrl) {
         hlsUrl = adaptiveUrl;
